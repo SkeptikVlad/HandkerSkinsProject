@@ -1,0 +1,2724 @@
+﻿=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\.mvn\wrapper\maven-wrapper.properties
+=========================================
+wrapperVersion=3.3.4
+distributionType=only-script
+distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/apache-maven-3.9.16-bin.zip
+
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\anomalydetection\AnomalyDetectionService.java
+=========================================
+package org.example.handkerskinsproject.anomalydetection;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.example.handkerskinsproject.entity.SkinPriceHistoryEntity;
+import org.example.handkerskinsproject.notification.TelegramNotificationService;
+import org.example.handkerskinsproject.repository.SkinPriceHistoryRepository;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.Optional;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class AnomalyDetectionService {
+
+    private final SkinPriceHistoryRepository historyRepository;
+    private final TelegramNotificationService notificationService; // <-- Р’РЅРµРґСЂСЏРµРј
+
+    private static final BigDecimal SKINPORT_FEE_MULTIPLIER = new BigDecimal("0.88");
+    private static final BigDecimal MIN_PROFIT_THRESHOLD = new BigDecimal("0.50");
+
+    public void checkForAnomalies(SkinEntity skin, BigDecimal currentMinPrice, BigDecimal suggestedPrice) {
+        if (currentMinPrice == null || currentMinPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+
+        // 1. РџСЂРѕРІРµСЂРєР° РїСЂРёР±С‹Р»СЊРЅРѕР№ Р°РЅРѕРјР°Р»РёРё
+        if (suggestedPrice != null && suggestedPrice.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal netRevenue = suggestedPrice.multiply(SKINPORT_FEE_MULTIPLIER);
+            BigDecimal netProfit = netRevenue.subtract(currentMinPrice);
+
+            if (netProfit.compareTo(MIN_PROFIT_THRESHOLD) >= 0) {
+                BigDecimal roiPercent = netProfit
+                        .divide(currentMinPrice, 4, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100"))
+                        .setScale(1, RoundingMode.HALF_UP);
+
+                String message = String.format("""
+                        рџ”Ґ <b>РќРђР™Р”Р•РќРђ РђРќРћРњРђР›РРЇ!</b>
+                        
+                        рџ”« <b>РџСЂРµРґРјРµС‚:</b> %s
+                        рџ’° <b>Р¦РµРЅР° РїРѕРєСѓРїРєРё:</b> $%s
+                        рџ“Љ <b>Р С‹РЅРѕРє (Suggested):</b> $%s
+                        рџ’µ <b>Р§РёСЃС‚С‹Р№ РїСЂРѕС„РёС‚ (-12%%):</b> +$%s
+                        рџ“€ <b>ROI:</b> %s%%
+                        """,
+                        skin.getMarketHashName(),
+                        currentMinPrice,
+                        suggestedPrice,
+                        netProfit.setScale(2, RoundingMode.HALF_UP),
+                        roiPercent
+                );
+
+                log.info("рџ”Ґ РќР°Р№РґРµРЅР° Р°РЅРѕРјР°Р»РёСЏ РґР»СЏ {}, РѕС‚РїСЂР°РІРєР° РІ Telegram...", skin.getMarketHashName());
+                notificationService.sendNotification(message); // <-- РћС‚РїСЂР°РІРєР° РІ TG
+            }
+        }
+
+        // 2. РџСЂРѕРІРµСЂРєР° РїР°РґРµРЅРёСЏ С†РµРЅС‹
+        Optional<SkinPriceHistoryEntity> previousHistoryOpt = historyRepository.findFirstBySkinOrderByIdDesc(skin);
+
+        if (previousHistoryOpt.isPresent()) {
+            BigDecimal previousPrice = previousHistoryOpt.get().getMinPrice();
+
+            if (previousPrice != null && previousPrice.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal dropThreshold = previousPrice.multiply(new BigDecimal("0.90"));
+
+                if (currentMinPrice.compareTo(dropThreshold) <= 0) {
+                    BigDecimal dropPercent = BigDecimal.ONE
+                            .subtract(currentMinPrice.divide(previousPrice, 4, RoundingMode.HALF_UP))
+                            .multiply(new BigDecimal("100"))
+                            .setScale(1, RoundingMode.HALF_UP);
+
+                    String message = String.format("""
+                            рџ“‰ <b>РћР‘Р’РђР› Р¦Р•РќР«!</b>
+                            
+                            рџ”« <b>РџСЂРµРґРјРµС‚:</b> %s
+                            рџ“‰ <b>РЈРїР°Р» РЅР°:</b> %s%%
+                            рџ’µ <b>РќРѕРІР°СЏ С†РµРЅР°:</b> $%s
+                            вЏі <b>РџСЂРѕС€Р»Р°СЏ С†РµРЅР°:</b> $%s
+                            """,
+                            skin.getMarketHashName(),
+                            dropPercent,
+                            currentMinPrice,
+                            previousPrice
+                    );
+
+                    notificationService.sendNotification(message); // <-- РћС‚РїСЂР°РІРєР° РІ TG
+                }
+            }
+        }
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\config\AppConfig.java
+=========================================
+package org.example.handkerskinsproject.config;
+
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.web.client.RestClient;
+
+import java.net.http.HttpClient;
+import java.time.Duration;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Configuration
+public class AppConfig {
+
+    @Bean
+    public ObjectMapper objectMapper() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        return objectMapper;
+    }
+
+    @Bean
+    public RestClient.Builder restClientBuilder() {
+        HttpClient jdkHttpClient = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .connectTimeout(Duration.ofSeconds(2))
+                .build();
+
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(jdkHttpClient);
+        requestFactory.setReadTimeout(Duration.ofSeconds(4));
+
+        return RestClient.builder()
+                .requestFactory(requestFactory);
+    }
+
+    /**
+     * РћС‚РґРµР»СЊРЅС‹Р№ РїСѓР» РґР»СЏ РїРѕРєСѓРїРєРё вЂ” РІРёСЂС‚СѓР°Р»СЊРЅС‹Рµ РїРѕС‚РѕРєРё, С‡С‚РѕР±С‹ Р±Р»РѕРєРёСЂСѓСЋС‰РёР№
+     * HTTP-РІС‹Р·РѕРІ /buy РЅРёРєРѕРіРґР° РЅРµ Р·Р°РґРµСЂР¶РёРІР°Р» С‡С‚РµРЅРёРµ WebSocket-СЃРѕРѕР±С‰РµРЅРёР№.
+     */
+    @Bean(destroyMethod = "shutdown")
+    public ExecutorService buyExecutorService() {
+        return Executors.newVirtualThreadPerTaskExecutor();
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\controller\SkinPriceController.java
+=========================================
+package org.example.handkerskinsproject.controller;
+
+import lombok.RequiredArgsConstructor;
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.example.handkerskinsproject.service.SkinPriceService;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/v1/skins")
+@RequiredArgsConstructor
+public class SkinPriceController {
+
+    private final SkinPriceService skinPriceService;
+
+    @GetMapping
+    public ResponseEntity<List<SkinEntity>> getAllTrackedSkins() {
+        return ResponseEntity.ok(skinPriceService.getAllTrackedSkins());
+    }
+
+    @PostMapping("/sync")
+    public ResponseEntity<String> syncPrices() {
+        skinPriceService.syncPrices();
+        return ResponseEntity.ok("РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ С†РµРЅ СЃ Market.CSGO СѓСЃРїРµС€РЅРѕ Р·Р°РїСѓС‰РµРЅР°!");
+    }
+
+    @PostMapping
+    public ResponseEntity<?> addSkinToTrack(@RequestParam("name") String name) {
+        try {
+            SkinEntity skin = skinPriceService.addSkinToTrack(name);
+            return ResponseEntity.status(HttpStatus.CREATED).body(skin);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    @PostMapping("/import")
+    public ResponseEntity<String> importSkins(
+            @RequestParam(value = "min", defaultValue = "500") java.math.BigDecimal min,
+            @RequestParam(value = "max", defaultValue = "15000") java.math.BigDecimal max) { // Р±С‹Р»Рѕ 5000
+        var imported = skinPriceService.importSkinsInPriceRange(min, max);
+        return ResponseEntity.ok("РРјРїРѕСЂС‚РёСЂРѕРІР°РЅРѕ РЅРѕРІС‹С… СЃРєРёРЅРѕРІ: " + imported.size());
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\dto\MarketItemPriceDto.java
+=========================================
+package org.example.handkerskinsproject.dto;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import java.math.BigDecimal;
+
+public record MarketItemPriceDto(
+        @JsonProperty("market_hash_name") String marketHashName,
+        @JsonProperty("price") BigDecimal minPrice,
+        @JsonProperty("volume") Integer volume
+) {}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\dto\MarketOrderDto.java
+=========================================
+package org.example.handkerskinsproject.dto;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import java.math.BigDecimal;
+
+public record MarketOrderDto(
+        @JsonProperty("market_hash_name") String marketHashName,
+        @JsonProperty("price") BigDecimal topOrder
+) {}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\dto\MarketOrdersFileResponse.java
+=========================================
+package org.example.handkerskinsproject.dto;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.List;
+
+public record MarketOrdersFileResponse(
+        @JsonProperty("success") boolean success,
+        @JsonProperty("items") List<MarketOrderDto> items
+) {}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\dto\MarketPricesResponse.java
+=========================================
+package org.example.handkerskinsproject.dto;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.List;
+
+public record MarketPricesResponse(
+        @JsonProperty("success") boolean success,
+        @JsonProperty("items") List<MarketItemPriceDto> items
+) {}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\dto\MarketWsMessageDto.java
+=========================================
+package org.example.handkerskinsproject.dto;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import java.math.BigDecimal;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record MarketWsMessageDto(
+        @JsonProperty("event") String event,        // "change", "new", "remove", "sold"
+        @JsonProperty("id") String itemId,           // id Р»РѕС‚Р° РЅР° РїР»РѕС‰Р°РґРєРµ
+        @JsonProperty("class") String classId,       // Steam classid
+        @JsonProperty("instance") String instanceId, // Steam instanceid
+        @JsonProperty("name_id") Long nameId,        // С‡РёСЃР»РѕРІРѕР№ ID РїСЂРµРґРјРµС‚Р° вЂ” РќР• СЃС‚СЂРѕРєР° СЃ РЅР°Р·РІР°РЅРёРµРј!
+        @JsonProperty("price") BigDecimal price,
+        @JsonProperty("asset") String assetId,
+        @JsonProperty("inspect_url") String inspectUrl
+) {}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\entity\SkinEntity.java
+=========================================
+package org.example.handkerskinsproject.entity;
+
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+@Entity
+@Table(name = "skins")
+@Getter
+@Setter
+@NoArgsConstructor
+public class SkinEntity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "market_hash_name", nullable = false, unique = true)
+    private String marketHashName;
+
+    public SkinEntity(String marketHashName) {
+        this.marketHashName = marketHashName;
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\entity\SkinPriceHistoryEntity.java
+=========================================
+package org.example.handkerskinsproject.entity;
+
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import org.hibernate.annotations.CreationTimestamp;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "skin_price_history")
+@Getter
+@Setter
+@NoArgsConstructor
+public class SkinPriceHistoryEntity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "skin_id", nullable = false)
+    private SkinEntity skin;
+
+    @Column(name = "min_price")
+    private BigDecimal minPrice;
+
+    @Column(name = "top_order")
+    private BigDecimal topOrder;
+
+    @Column(name = "volume")
+    private Integer volume;
+
+    @CreationTimestamp
+    @Column(name = "created_at", updatable = false)
+    private LocalDateTime createdAt;
+
+    public SkinPriceHistoryEntity(SkinEntity skin, BigDecimal minPrice, BigDecimal topOrder, Integer volume) {
+        this.skin = skin;
+        this.minPrice = minPrice;
+        this.topOrder = topOrder;
+        this.volume = volume;
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\fetcher\MarketCsgoFetcherClient.java
+=========================================
+package org.example.handkerskinsproject.fetcher;
+
+import lombok.extern.slf4j.Slf4j;
+import org.example.handkerskinsproject.dto.MarketItemPriceDto;
+import org.example.handkerskinsproject.dto.MarketOrderDto;
+import org.example.handkerskinsproject.dto.MarketOrdersFileResponse;
+import org.example.handkerskinsproject.dto.MarketPricesResponse;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+
+import java.math.BigDecimal;
+import java.util.Collections;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Component
+public class MarketCsgoFetcherClient {
+
+    private final RestClient restClient;
+    private final String apiKey;
+
+    public MarketCsgoFetcherClient(
+            RestClient.Builder builder,
+            @Value("${market-csgo.api.base-url}") String baseUrl,
+            @Value("${market-csgo.api.key}") String apiKey) {
+        this.restClient = builder.baseUrl(baseUrl).build();
+        this.apiKey = apiKey;
+    }
+
+    public MarketPricesResponse fetchAllPrices() {
+        return restClient.get()
+                .uri("/prices/RUB.json")
+                .retrieve()
+                .body(MarketPricesResponse.class);
+    }
+
+    public Map<String, MarketItemPriceDto> fetchPricesMap() {
+        try {
+            MarketPricesResponse response = fetchAllPrices();
+            if (response != null && response.items() != null) {
+                return response.items().stream()
+                        .collect(Collectors.toMap(
+                                MarketItemPriceDto::marketHashName,
+                                dto -> dto,
+                                (existing, replacement) -> existing
+                        ));
+            }
+        } catch (Exception e) {
+            log.error("РћС€РёР±РєР° РїСЂРё Р·Р°РіСЂСѓР·РєРµ С„Р°Р№Р»Р° С†РµРЅ: {}", e.getMessage());
+        }
+        return Collections.emptyMap();
+    }
+
+    public Map<String, BigDecimal> fetchTopOrdersMap() {
+        try {
+            MarketOrdersFileResponse response = restClient.get()
+                    .uri("/prices/orders/RUB.json") // РСЃРїРѕР»СЊР·РѕРІР°РЅ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅС‹Р№ РїСѓС‚СЊ
+                    .retrieve()
+                    .body(MarketOrdersFileResponse.class);
+
+            if (response != null && response.items() != null) {
+                return response.items().stream()
+                        .collect(Collectors.toMap(
+                                MarketOrderDto::marketHashName,
+                                dto -> dto.topOrder() != null ? dto.topOrder() : BigDecimal.ZERO,
+                                (existing, replacement) -> existing
+                        ));
+            }
+        } catch (Exception e) {
+            log.error("РћС€РёР±РєР° РїСЂРё Р·Р°РіСЂСѓР·РєРµ С„Р°Р№Р»Р° РѕСЂРґРµСЂРѕРІ: {}", e.getMessage());
+        }
+        return Collections.emptyMap();
+    }
+
+    public void sendPing() {
+        restClient.get()
+                .uri("/ping?key={key}&v=2", apiKey)
+                .retrieve()
+                .toBodilessEntity();
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\fetcher\MarketWebSocketClient.java
+=========================================
+package org.example.handkerskinsproject.fetcher;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.example.handkerskinsproject.notification.TelegramNotificationService;
+import org.example.handkerskinsproject.service.*;
+import org.java_websocket.client.WebSocketClient;
+import org.java_websocket.handshake.ServerHandshake;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.net.URI;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class MarketWebSocketClient extends WebSocketClient {
+
+    private static final int CONNECT_ID = 1;
+    private static final int SUBSCRIBE_ID = 2;
+    private static final String CHANNEL = "public:items:730:rub";
+    private static final long DEDUP_TTL_MILLIS = 5 * 60 * 1000;
+
+    private final MarketAuthService authService;
+    private final ObjectMapper objectMapper;
+    private final SkinPriceService skinPriceService;
+    private final NameDictionaryService nameDictionary;
+    private final TopOrderCacheService topOrderCache;
+    private final MinPriceCacheService minPriceCache;
+    private final MarketBuyService buyService;
+    private final TelegramNotificationService notificationService;
+    private final ExecutorService buyExecutor;
+
+    private final Map<String, Long> attemptedItemIds = new ConcurrentHashMap<>();
+
+    private volatile boolean isClosedManually = false;
+    private record MarginTier(BigDecimal maxTopOrder, BigDecimal minMargin, BigDecimal maxMargin) {}
+
+    private static final long SKIN_COOLDOWN_MILLIS = 30_000;
+    private static final long WARMUP_MILLIS = 60_000;
+
+    private volatile long subscribedAtMillis = 0;// 30 СЃРµРє
+    private record SpreadTier(BigDecimal maxTopOrder, BigDecimal minResaleSpread) {}
+
+    private static final List<SpreadTier> SPREAD_TIERS = List.of(
+            new SpreadTier(new BigDecimal("1000"), new BigDecimal("1.30")),
+            new SpreadTier(new BigDecimal("1500"), new BigDecimal("1.30")),
+            new SpreadTier(new BigDecimal("3000"), new BigDecimal("1.25")),
+            new SpreadTier(new BigDecimal("5000"), new BigDecimal("1.20")), // Р±С‹Р»Рѕ catch-all, С‚РµРїРµСЂСЊ СЏРІРЅР°СЏ РіСЂР°РЅРёС†Р°
+            new SpreadTier(new BigDecimal("7000"), new BigDecimal("1.20")),
+            new SpreadTier(new BigDecimal("10000"), new BigDecimal("1.20")),
+            new SpreadTier(new BigDecimal("15000"), new BigDecimal("1.20")),
+            new SpreadTier(null,                   new BigDecimal("1.20"))  // >7000, Р·Р°РїР°СЃРЅРѕР№ catch-all
+    );
+
+    private final Map<String, Long> skinCooldown = new ConcurrentHashMap<>();
+
+
+    public MarketWebSocketClient(URI serverUri,
+                                 MarketAuthService authService,
+                                 ObjectMapper objectMapper,
+                                 SkinPriceService skinPriceService,
+                                 NameDictionaryService nameDictionary,
+                                 TopOrderCacheService topOrderCache,
+                                 MinPriceCacheService minPriceCache,
+                                 MarketBuyService buyService,
+                                 TelegramNotificationService notificationService,
+                                 ExecutorService buyExecutor) {
+        super(serverUri);
+        this.authService = authService;
+        this.objectMapper = objectMapper;
+        this.skinPriceService = skinPriceService;
+        this.nameDictionary = nameDictionary;
+        this.topOrderCache = topOrderCache;
+        this.minPriceCache = minPriceCache;
+        this.buyService = buyService;
+        this.notificationService = notificationService;
+        this.buyExecutor = buyExecutor;
+    }
+    private static final List<MarginTier> MARGIN_TIERS = List.of(
+            new MarginTier(new BigDecimal("1000"), new BigDecimal("1.01"), new BigDecimal("1.08")), // 500-1000: 1-5%
+            new MarginTier(new BigDecimal("1500"), new BigDecimal("1.01"), new BigDecimal("1.07")), // 1000-1500: 1-4%
+            new MarginTier(new BigDecimal("3000"), new BigDecimal("1.01"), new BigDecimal("1.07")), // 1500-3000: 1-3%
+            new MarginTier(new BigDecimal("5000"), new BigDecimal("1.01"), new BigDecimal("1.05")), // 3000-5000: 1-2%
+            new MarginTier(new BigDecimal("7000"), new BigDecimal("1.005"), new BigDecimal("1.05")),
+            new MarginTier(new BigDecimal("10000"), new BigDecimal("1.005"), new BigDecimal("1.05")),// 5000-7000: 1-1.5%
+            new MarginTier(new BigDecimal("15000"), new BigDecimal("1.005"), new BigDecimal("1.05")),
+            new MarginTier(null,                    new BigDecimal("1.005"), new BigDecimal("1.05"))  // >7000, Р·Р°РїР°СЃРЅРѕР№ catch-all
+    );
+
+
+    @Override
+    public void onOpen(ServerHandshake handshakedata) {
+        log.info("WebSocket СЃРѕРµРґРёРЅРµРЅРёРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅРѕ. РћС‚РїСЂР°РІРєР° connect...");
+        try {
+            String token = authService.fetchFreshWsToken();
+            Map<String, Object> connectCommand = Map.of(
+                    "id", CONNECT_ID,
+                    "connect", Map.of("token", token)
+            );
+            send(objectMapper.writeValueAsString(connectCommand));
+        } catch (Exception e) {
+            log.error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ connect СЃ С‚РѕРєРµРЅРѕРј: {}", e.getMessage());
+            super.close();
+        }
+    }
+
+    private boolean trySkinCooldown(String hashName) {
+        long now = System.currentTimeMillis();
+        Long last = skinCooldown.putIfAbsent(hashName, now);
+        if (last != null) {
+            if (now - last < SKIN_COOLDOWN_MILLIS) {
+                return false;
+            }
+            skinCooldown.put(hashName, now);
+        }
+        return true;
+    }
+
+    @Override
+    public void onMessage(String message) {
+        try {
+            if ("{}".equals(message)) {
+                send("{}");
+                return;
+            }
+
+            JsonNode root = objectMapper.readTree(message);
+
+            if (root.has("id") && root.get("id").asInt() == CONNECT_ID) {
+                if (root.has("error")) {
+                    log.error("РћС€РёР±РєР° Р°РІС‚РѕСЂРёР·Р°С†РёРё РїСЂРё connect: {}", root.get("error"));
+                    return;
+                }
+                Map<String, Object> subscribeCommand = Map.of(
+                        "id", SUBSCRIBE_ID,
+                        "subscribe", Map.of("channel", CHANNEL)
+                );
+                send(objectMapper.writeValueAsString(subscribeCommand));
+                return;
+            }
+
+            if (root.has("id") && root.get("id").asInt() == SUBSCRIBE_ID) {
+                if (root.has("error")) {
+                    log.error("РћС€РёР±РєР° РїРѕРґРїРёСЃРєРё РЅР° РєР°РЅР°Р» {}: {}", CHANNEL, root.get("error"));
+                } else {
+                    log.info("РЈСЃРїРµС€РЅРѕ РїРѕРґРїРёСЃР°Р»РёСЃСЊ РЅР° РєР°РЅР°Р» {}", CHANNEL);
+                    subscribedAtMillis = System.currentTimeMillis();
+                }
+                return;
+            }
+
+            JsonNode dataNode = extractPublicationData(root);
+            if (dataNode != null) {
+                handlePriceUpdate(dataNode);
+            }
+
+        } catch (Exception e) {
+            log.debug("РќРµСЂРµР»РµРІР°РЅС‚РЅРѕРµ РёР»Рё РЅРµ РїРѕРґР»РµР¶Р°С‰РµРµ РїР°СЂСЃРёРЅРіСѓ WS СЃРѕРѕР±С‰РµРЅРёРµ: {}", message, e);
+        }
+    }
+
+    private JsonNode extractPublicationData(JsonNode root) {
+        JsonNode push = root.path("push");
+        JsonNode pub = push.path("pub");
+        JsonNode data = pub.path("data");
+        return data.isMissingNode() ? null : data;
+    }
+    private final java.util.concurrent.atomic.AtomicLong rawMessageCount = new java.util.concurrent.atomic.AtomicLong();
+
+    private void handlePriceUpdate(JsonNode dataNode) {
+        try {
+            long count = rawMessageCount.incrementAndGet();
+            if (count % 2000 == 0) {
+                log.info("WS-РґРёР°РіРЅРѕСЃС‚РёРєР°: РѕР±СЂР°Р±РѕС‚Р°РЅРѕ {} СЃС‹СЂС‹С… СЃРѕР±С‹С‚РёР№ Р·Р° {} РјСЃ СЃ РјРѕРјРµРЅС‚Р° РїРѕРґРїРёСЃРєРё",
+                        count, System.currentTimeMillis() - subscribedAtMillis);
+            }
+            String event = dataNode.path("event").asText(null);
+            if (!"new".equals(event) && !"change".equals(event)) {
+                return;
+            }
+            if (subscribedAtMillis == 0
+                    || System.currentTimeMillis() - subscribedAtMillis < WARMUP_MILLIS) {
+                return; // СЌС‚Рѕ СЃРЅРёРјРѕРє СЃ РјРѕРјРµРЅС‚Р° РїРѕРґРїРёСЃРєРё, РЅРµ Р¶РёРІРѕРµ РЅРѕРІРѕРµ СЃРѕР±С‹С‚РёРµ
+            }
+
+            long nameId = dataNode.path("name_id").asLong();
+            BigDecimal price = new BigDecimal(dataNode.path("price").asText("0"));
+            String itemId = dataNode.path("id").asText(null);
+
+            if (itemId == null || itemId.isBlank()) {
+                log.debug("WS СЃРѕР±С‹С‚РёРµ Р±РµР· id Р»РѕС‚Р°, РїСЂРѕРїСѓСЃРєР°РµРј: {}", dataNode);
+                return;
+            }
+
+            String hashName = nameDictionary.resolve(nameId);
+            if (hashName == null) {
+                return;
+            }
+
+            BigDecimal topOrder = topOrderCache.getTopOrder(hashName);
+            if (topOrder == null || topOrder.compareTo(BigDecimal.ZERO) <= 0) {
+                return;
+            }
+
+            BigDecimal minPrice = minPriceCache.getMinPrice(hashName);
+            BigDecimal minResaleSpread = resolveSpreadTier(topOrder).minResaleSpread();
+            if (minPrice == null || minPrice.compareTo(topOrder.multiply(minResaleSpread)) < 0) {
+                return;
+            }
+
+            MarginTier tier = resolveMarginTier(topOrder);
+            BigDecimal lowerBound = topOrder.multiply(tier.minMargin());
+            BigDecimal upperBound = topOrder.multiply(tier.maxMargin());
+
+            if (price.compareTo(lowerBound) >= 0 && price.compareTo(upperBound) <= 0) {
+                if (!tryReserve(itemId)) {
+                    log.debug("Р›РѕС‚ {} СѓР¶Рµ РІ РѕР±СЂР°Р±РѕС‚РєРµ/РєСѓРїР»РµРЅ, РїРѕРІС‚РѕСЂРЅСѓСЋ РїРѕРїС‹С‚РєСѓ РїСЂРѕРїСѓСЃРєР°РµРј", itemId);
+                    return;
+                }
+                if (!trySkinCooldown(hashName)) {
+                    log.debug("РЎРєРёРЅ {} СѓР¶Рµ РѕР±СЂР°Р±Р°С‚С‹РІР°Р»СЃСЏ РЅРµРґР°РІРЅРѕ, РїСЂРѕРїСѓСЃРєР°РµРј РїРѕРІС‚РѕСЂРЅС‹Р№ Р»РѕС‚ {}", hashName, itemId);
+                    return;
+                }
+
+                log.info("РљР°РЅРґРёРґР°С‚ РЅР° РїРѕРєСѓРїРєСѓ: {} (id={}) Р·Р° {} (topOrder={})", hashName, itemId, price, topOrder);
+                long detectedAtNanos = System.nanoTime();
+
+                buyExecutor.execute(() -> attemptPurchase(itemId, hashName, price, topOrder, minPrice, detectedAtNanos));            }
+        } catch (Exception e) {
+            log.debug("РћС€РёР±РєР° РѕР±СЂР°Р±РѕС‚РєРё price update: {}", e.getMessage());
+        }
+    }
+
+    private void attemptPurchase(String itemId, String hashName, BigDecimal price, BigDecimal topOrder, BigDecimal minPrice, long detectedAtNanos) {
+        MarketBuyService.BuyResult result = buyService.buyItem(itemId, price);
+        long elapsedMs = (System.nanoTime() - detectedAtNanos) / 1_000_000;
+
+        BigDecimal overOrderPercent = price.subtract(topOrder)
+                .divide(topOrder, 4, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100))
+                .setScale(1, RoundingMode.HALF_UP);
+
+        BigDecimal resaleSpreadPercent = minPrice.subtract(topOrder)
+                .divide(topOrder, 4, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100))
+                .setScale(1, RoundingMode.HALF_UP);
+
+        boolean isDryRun = "DRY_RUN".equals(result.message());
+
+        String message;
+        if (result.success()) {
+            message = String.format("""
+        %s <b>Р›РћРў Р’Р«РљРЈРџР›Р•Рќ%s</b>
+
+        рџ”« <b>РџСЂРµРґРјРµС‚:</b> %s
+        рџ’° <b>Р¦РµРЅР°:</b> %s в‚Ѕ
+        рџ“Љ <b>top_order:</b> %s в‚Ѕ (+%s%%)
+        рџ“€ <b>РјРёРЅ. С†РµРЅР° РЅР° СЂС‹РЅРєРµ:</b> %s в‚Ѕ (СЃРїСЂРµРґ +%s%% РѕС‚ top_order)
+        рџ†” <b>id Р»РѕС‚Р°:</b> %s
+        вЏ± <b>Р”РµС‚РµРєС‚ в†’ РѕС‚РІРµС‚ API:</b> %d РјСЃ
+        %s
+        """,
+                    isDryRun ? "рџ§Є" : "вњ…",
+                    isDryRun ? " (DRY-RUN, СЂРµР°Р»СЊРЅР°СЏ РїРѕРєСѓРїРєР° РќР• РѕС‚РїСЂР°РІР»РµРЅР°)" : "",
+                    hashName, price, topOrder, overOrderPercent, minPrice, resaleSpreadPercent, itemId, elapsedMs,
+                    isDryRun ? "" : "РќРµ Р·Р°Р±СѓРґСЊ РїРѕРґС‚РІРµСЂРґРёС‚СЊ СЃРґРµР»РєСѓ РІ Steam, РµСЃР»Рё РїРѕС‚СЂРµР±СѓРµС‚СЃСЏ.");
+            log.info("Р›РѕС‚ {} {} Р·Р° {} ({} РјСЃ)", itemId, isDryRun ? "Р±С‹Р» Р±С‹ РєСѓРїР»РµРЅ (dry-run)" : "СѓСЃРїРµС€РЅРѕ РєСѓРїР»РµРЅ", price, elapsedMs);
+        } else {
+            message = String.format("""
+                вќЊ <b>РџРћРљРЈРџРљРђ РќР• РЈР”РђР›РђРЎР¬</b>
+
+                рџ”« <b>РџСЂРµРґРјРµС‚:</b> %s
+                рџ’° <b>Р¦РµРЅР°:</b> %s в‚Ѕ
+                рџ“€ <b>РјРёРЅ. С†РµРЅР° РЅР° СЂС‹РЅРєРµ:</b> %s в‚Ѕ
+                рџ†” <b>id Р»РѕС‚Р°:</b> %s
+                вљ пёЏ <b>РџСЂРёС‡РёРЅР°:</b> %s
+                вЏ± <b>Р”РµС‚РµРєС‚ в†’ РѕС‚РІРµС‚ API:</b> %d РјСЃ
+                """,
+                    hashName, price, minPrice, itemId, result.message(), elapsedMs);
+            log.warn("РќРµ СѓРґР°Р»РѕСЃСЊ РєСѓРїРёС‚СЊ Р»РѕС‚ {}: {} ({} РјСЃ)", itemId, result.message(), elapsedMs);
+        }
+
+        notificationService.sendNotification(message);
+    }
+
+    /**
+     * РђС‚РѕРјР°СЂРЅРѕ "Р±СЂРѕРЅРёСЂСѓРµС‚" id Р»РѕС‚Р° РїРѕРґ РїРѕРїС‹С‚РєСѓ РїРѕРєСѓРїРєРё, С‡С‚РѕР±С‹ РїРѕРІС‚РѕСЂРЅС‹Рµ
+     * new/change СЃРѕР±С‹С‚РёСЏ РїРѕ С‚РѕРјСѓ Р¶Рµ Р»РѕС‚Сѓ РЅРµ Р·Р°РїСѓСЃРєР°Р»Рё РІС‚РѕСЂСѓСЋ РїРѕРїС‹С‚РєСѓ.
+     */
+    private boolean tryReserve(String itemId) {
+        long now = System.currentTimeMillis();
+        Long previous = attemptedItemIds.putIfAbsent(itemId, now);
+        if (previous != null) {
+            return false;
+        }
+        if (attemptedItemIds.size() > 5000) {
+            attemptedItemIds.entrySet().removeIf(e -> now - e.getValue() > DEDUP_TTL_MILLIS);
+        }
+        return true;
+    }
+
+    public void shutdownPermanently() {
+        this.isClosedManually = true;
+        close(); // С‚РµРїРµСЂСЊ СЌС‚Рѕ "С‡РёСЃС‚С‹Р№" close() РёР· WebSocketClient, Р±РµР· РїРѕР±РѕС‡РЅС‹С… СЌС„С„РµРєС‚РѕРІ
+    }
+
+
+    @Override
+    public void onClose(int code, String reason, boolean remote) {
+        log.warn("WebSocket СЃРѕРµРґРёРЅРµРЅРёРµ Р·Р°РєСЂС‹С‚Рѕ. РљРѕРґ: {}, РџСЂРёС‡РёРЅР°: {}. Р”РёСЃС‚Р°РЅС†РёРѕРЅРЅРѕ: {}", code, reason, remote);
+        if (!isClosedManually) {
+            new Thread(() -> {
+                try {
+                    Thread.sleep(5000);
+                    if (!isClosedManually) {
+                        log.info("РџРѕРїС‹С‚РєР° РїРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёСЏ WebSocket...");
+                        this.reconnectBlocking();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (Exception e) {
+                    log.error("РћС€РёР±РєР° РїСЂРё РїРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёРё Рє WebSocket: {}", e.getMessage());
+                    super.close();
+                }
+            }).start();
+        }
+    }
+
+    @Override
+    public void onError(Exception ex) {
+        log.error("РћС€РёР±РєР° WebSocket: {}", ex.getMessage());
+    }
+    private MarginTier resolveMarginTier(BigDecimal topOrder) {
+        for (MarginTier tier : MARGIN_TIERS) {
+            if (tier.maxTopOrder() == null || topOrder.compareTo(tier.maxTopOrder()) <= 0) {
+                return tier;
+            }
+        }
+        return MARGIN_TIERS.get(MARGIN_TIERS.size() - 1);
+    }
+    private SpreadTier resolveSpreadTier(BigDecimal topOrder) {
+        for (SpreadTier tier : SPREAD_TIERS) {
+            if (tier.maxTopOrder() == null || topOrder.compareTo(tier.maxTopOrder()) <= 0) {
+                return tier;
+            }
+        }
+        return SPREAD_TIERS.get(SPREAD_TIERS.size() - 1);
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\fetcher\MarketWsManager.java
+=========================================
+package org.example.handkerskinsproject.fetcher;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.example.handkerskinsproject.notification.TelegramNotificationService;
+import org.example.handkerskinsproject.service.*;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
+
+import java.net.URI;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+@Component
+public class MarketWsManager {
+
+    private final MarketAuthService authService;
+    private final ObjectMapper objectMapper;
+    private final SkinPriceService skinPriceService;
+    private final NameDictionaryService nameDictionary;
+    private final TopOrderCacheService topOrderCache;
+    private final MarketBuyService buyService;
+    private final MinPriceCacheService minPriceCache;
+    private final TelegramNotificationService notificationService;
+    private final ExecutorService buyExecutorService;
+
+    @Value("${market-csgo.ws.url:wss://wsprice.csgo.com/connection/websocket}")
+    private String wsUrl;
+
+    private MarketWebSocketClient client;
+
+    public MarketWsManager(MarketAuthService authService,
+                           ObjectMapper objectMapper,
+                           SkinPriceService skinPriceService,
+                           NameDictionaryService nameDictionary,
+                           TopOrderCacheService topOrderCache,
+                           MinPriceCacheService minPriceCache,
+                           MarketBuyService buyService,
+                           TelegramNotificationService notificationService,
+                           @Qualifier("buyExecutorService") ExecutorService buyExecutorService) {
+        this.authService = authService;
+        this.objectMapper = objectMapper;
+        this.skinPriceService = skinPriceService;
+        this.nameDictionary = nameDictionary;
+        this.topOrderCache = topOrderCache;
+        this.minPriceCache = minPriceCache;
+        this.buyService = buyService;
+        this.notificationService = notificationService;
+        this.buyExecutorService = buyExecutorService;
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void start() {
+        try {
+            log.info("РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ WebSocket СЃРѕРµРґРёРЅРµРЅРёСЏ Рє {}", wsUrl);
+            URI serverUri = URI.create(wsUrl);
+            this.client = new MarketWebSocketClient(
+                    serverUri, authService, objectMapper, skinPriceService, nameDictionary, topOrderCache,
+                    minPriceCache,   // в†ђ РќРћР’Р«Р™ Р°СЂРіСѓРјРµРЅС‚
+                    buyService, notificationService, buyExecutorService
+            );
+            this.client.connect();
+        } catch (Exception e) {
+            log.error("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ WebSocket РєР»РёРµРЅС‚", e);
+        }
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\notification\TelegramNotificationService.java
+=========================================
+package org.example.handkerskinsproject.notification;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import org.telegram.telegrambots.meta.generics.TelegramClient;
+
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+
+@Slf4j
+@Service
+public class TelegramNotificationService {
+
+    private final TelegramClient telegramClient;
+    private final String chatId;
+    private final BlockingQueue<String> queue = new LinkedBlockingQueue<>();
+
+    public TelegramNotificationService(
+            @Value("${telegram.bot.token}") String botToken,
+            @Value("${telegram.bot.chat-id}") String chatId) {
+        this.telegramClient = new OkHttpTelegramClient(botToken);
+        this.chatId = chatId;
+        Thread dispatcher = new Thread(this::consumeLoop, "telegram-dispatcher");
+        dispatcher.setDaemon(true);
+        dispatcher.start();
+    }
+
+    public void sendNotification(String text) {
+        queue.offer(text);
+    }
+
+    private void consumeLoop() {
+        while (true) {
+            try {
+                String text = queue.take();
+                sendWithRetry(text, 3);
+                Thread.sleep(200); // РЅРµ Р±РѕР»СЊС€Рµ ~5 СЃРѕРѕР±С‰РµРЅРёР№ РІ СЃРµРєСѓРЅРґСѓ
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private void sendWithRetry(String text, int attemptsLeft) {
+        SendMessage message = SendMessage.builder()
+                .chatId(chatId).text(text).parseMode("HTML").build();
+        try {
+            telegramClient.execute(message);
+            log.info("РЈРІРµРґРѕРјР»РµРЅРёРµ РѕС‚РїСЂР°РІР»РµРЅРѕ РІ Telegram!");
+        } catch (TelegramApiException e) {
+            log.warn("РћС€РёР±РєР° РѕС‚РїСЂР°РІРєРё РІ Telegram: {}", e.getMessage());
+            if (attemptsLeft > 1) {
+                try {
+                    Thread.sleep(3000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                sendWithRetry(text, attemptsLeft - 1);
+            } else {
+                log.error("РЎРѕРѕР±С‰РµРЅРёРµ РїРѕС‚РµСЂСЏРЅРѕ РїРѕСЃР»Рµ РЅРµСЃРєРѕР»СЊРєРёС… РїРѕРїС‹С‚РѕРє РѕС‚РїСЂР°РІРєРё РІ Telegram");
+            }
+        }
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\repository\SkinPriceHistoryRepository.java
+=========================================
+package org.example.handkerskinsproject.repository;
+
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.example.handkerskinsproject.entity.SkinPriceHistoryEntity;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+
+public interface SkinPriceHistoryRepository extends JpaRepository<SkinPriceHistoryEntity, Long> {
+    Optional<SkinPriceHistoryEntity> findFirstBySkinOrderByIdDesc(SkinEntity skin);
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\repository\SkinRepository.java
+=========================================
+package org.example.handkerskinsproject.repository;
+
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.Optional;
+
+public interface SkinRepository extends JpaRepository<SkinEntity, Long> {
+    Optional<SkinEntity> findByMarketHashName(String marketHashName);
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\scheduler\PriceMonitoringScheduler.java
+=========================================
+package org.example.handkerskinsproject.scheduler;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.example.handkerskinsproject.service.SkinPriceService;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class PriceMonitoringScheduler {
+
+    private final SkinPriceService skinPriceService;
+
+    @Scheduled(initialDelay = 600000, fixedRate = 600000)
+    public void monitorPrice() {
+        try {
+            skinPriceService.syncPrices();
+        } catch (HttpClientErrorException.TooManyRequests e) {
+            log.warn("Skinport Rate Limit (429): РџСЂРµРІС‹С€РµРЅ Р»РёРјРёС‚ Р·Р°РїСЂРѕСЃРѕРІ. РЎР»РµРґСѓСЋС‰Р°СЏ РїРѕРїС‹С‚РєР° С‡РµСЂРµР· 10 РјРёРЅСѓС‚.");
+        } catch (Exception e) {
+            log.error("РћС€РёР±РєР° РїСЂРё РѕР±РЅРѕРІР»РµРЅРёРё С†РµРЅ: {}", e.getMessage(), e);
+        }
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\service\MarketAuthService.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
+
+import java.util.Map;
+
+@Slf4j
+@Service
+public class MarketAuthService {
+
+    private final RestClient restClient;
+
+    @Value("${market-csgo.api.base-url:https://market.csgo.com/api/v2}")
+    private String baseUrl;
+
+    @Value("${market-csgo.api.key}")
+    private String apiKey;
+
+    public MarketAuthService(RestClient.Builder restClientBuilder) {
+        this.restClient = restClientBuilder.build();
+    }
+
+    public String fetchFreshWsToken() {
+        Map<String, Object> response = restClient.get()
+                .uri(baseUrl + "/get-ws-token?key=" + apiKey)
+                .retrieve()
+                .body(Map.class);
+
+        log.info("API get-ws-token response: {}", response);
+
+        if (response != null && Boolean.TRUE.equals(response.get("success"))) {
+            return (String) response.get("token"); // Р±С‹Р»Рѕ "wsAuth"
+        }
+        throw new RuntimeException("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ WS Auth Token: " + response);
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\service\MarketBuyService.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.Map;
+import java.util.UUID;
+
+@Slf4j
+@Service
+public class MarketBuyService {
+
+    private final RestClient restClient;
+    @Value("${market-csgo.buy.dry-run:false}")
+    private boolean dryRun;
+
+    @Value("${market-csgo.api.base-url:https://market.csgo.com/api/v2}")
+    private String baseUrl;
+
+    @Value("${market-csgo.api.key}")
+    private String apiKey;
+
+    public MarketBuyService(RestClient.Builder restClientBuilder) {
+        this.restClient = restClientBuilder.build();
+    }
+
+    public record BuyResult(boolean success, String message, String customId) {}
+
+    /**
+     * РџРѕРєСѓРїРєР° РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ Р»РѕС‚Р° РїРѕ РµРіРѕ id.
+     * @param itemId   id Р»РѕС‚Р° РЅР° РїР»РѕС‰Р°РґРєРµ вЂ” СЃС‚СЂРѕРєР° РєР°Рє РµСЃС‚СЊ РёР· WS-СЃРѕР±С‹С‚РёСЏ "id"
+     *                 (РЅРµ РїР°СЂСЃРёРј РІ long: Р·РЅР°С‡РµРЅРёСЏ Р±С‹РІР°СЋС‚ Р±РѕР»СЊС€РёРјРё, Р° РЅР°Рј СЌС‚Рѕ С‡РёСЃР»Рѕ
+     *                 РЅСѓР¶РЅРѕ С‚РѕР»СЊРєРѕ РєР°Рє РїР°СЂР°РјРµС‚СЂ URL, Р°СЂРёС„РјРµС‚РёРєР° РЅР°Рґ РЅРёРј РЅРµ РЅСѓР¶РЅР°)
+     * @param priceRub С†РµРЅР° Р»РѕС‚Р° РІ СЂСѓР±Р»СЏС…, РєРѕС‚РѕСЂСѓСЋ РјС‹ РІРёРґРµР»Рё РІ WS
+     */
+    public BuyResult buyItem(String itemId, BigDecimal priceRub) {
+        String customId = "auto-" + UUID.randomUUID().toString().substring(0, 20);
+        if (dryRun) {
+            log.info("[DRY-RUN] РљСѓРїРёР» Р±С‹ Р»РѕС‚ id={} РїРѕ С†РµРЅРµ {} СЂСѓР± (Р·Р°РїСЂРѕСЃ РЅРµ РѕС‚РїСЂР°РІР»РµРЅ)", itemId, priceRub);
+            return new BuyResult(true, "DRY_RUN", customId);
+        }
+        long priceKopecks = priceRub
+                .multiply(BigDecimal.valueOf(100))
+                .setScale(0, RoundingMode.CEILING)
+                .longValueExact();
+
+        try {
+            Map response = restClient.get()
+                    .uri(baseUrl + "/buy?key={key}&id={id}&price={price}&custom_id={customId}",
+                            apiKey, itemId, priceKopecks, customId)
+                    .retrieve()
+                    .body(Map.class);
+
+            log.info("РћС‚РІРµС‚ РЅР° РїРѕРєСѓРїРєСѓ id={}: {}", itemId, response);
+
+            boolean success = response != null && Boolean.TRUE.equals(response.get("success"));
+            String message = success ? "OK" : String.valueOf(response != null ? response.get("error") : "empty response");
+
+            return new BuyResult(success, message, customId);
+        } catch (Exception e) {
+            log.error("РћС€РёР±РєР° РїСЂРё РїРѕРєСѓРїРєРµ Р»РѕС‚Р° id={}: {}", itemId, e.getMessage());
+            return new BuyResult(false, e.getMessage(), customId);
+        }
+
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\service\MinPriceCacheService.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import lombok.extern.slf4j.Slf4j;
+import org.example.handkerskinsproject.dto.MarketItemPriceDto;
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.example.handkerskinsproject.fetcher.MarketCsgoFetcherClient;
+import org.example.handkerskinsproject.repository.SkinRepository;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Service
+public class MinPriceCacheService {
+
+    private final MarketCsgoFetcherClient fetcherClient;
+    private final SkinRepository skinRepository;
+
+    private final AtomicReference<Map<String, BigDecimal>> minPriceByHashName =
+            new AtomicReference<>(Map.of());
+
+    public MinPriceCacheService(MarketCsgoFetcherClient fetcherClient, SkinRepository skinRepository) {
+        this.fetcherClient = fetcherClient;
+        this.skinRepository = skinRepository;
+    }
+
+    @Scheduled(fixedRate = 7000)
+    public void refresh() {
+        try {
+            Set<String> trackedNames = skinRepository.findAll().stream()
+                    .map(SkinEntity::getMarketHashName)
+                    .collect(Collectors.toSet());
+            if (trackedNames.isEmpty()) return;
+
+            Map<String, MarketItemPriceDto> allPrices = fetcherClient.fetchPricesMap();
+
+            Map<String, BigDecimal> filtered = allPrices.entrySet().stream()
+                    .filter(e -> trackedNames.contains(e.getKey()) && e.getValue().minPrice() != null)
+                    .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().minPrice()));
+
+            minPriceByHashName.set(filtered);
+            log.info("РљСЌС€ РјРёРЅРёРјР°Р»СЊРЅС‹С… С†РµРЅ РѕР±РЅРѕРІР»С‘РЅ: {} РёР· {} РѕС‚СЃР»РµР¶РёРІР°РµРјС‹С… СЃРєРёРЅРѕРІ",
+                    filtered.size(), trackedNames.size());
+        } catch (Exception e) {
+            log.error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ РєСЌС€ РјРёРЅРёРјР°Р»СЊРЅС‹С… С†РµРЅ: {}", e.getMessage());
+        }
+    }
+
+    public BigDecimal getMinPrice(String marketHashName) {
+        return minPriceByHashName.get().get(marketHashName);
+    }
+}
+
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\service\NameDictionaryService.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
+@Slf4j
+@Service
+public class NameDictionaryService {
+
+    private final RestClient restClient;
+
+    @Value("${market-csgo.dictionary-url:https://market.csgo.com/api/v2/dictionary/names.json}")
+    private String dictionaryUrl;
+
+    private final AtomicReference<Map<Long, String>> nameById = new AtomicReference<>(Map.of());
+
+    public NameDictionaryService(RestClient.Builder builder) {
+        this.restClient = builder.build();
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void loadOnStartup() {
+        refresh();
+    }
+
+    @Scheduled(initialDelay = 24 * 60 * 60 * 1000, fixedRate = 24 * 60 * 60 * 1000)
+    public void refresh() {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> raw = restClient.get()
+                    .uri(dictionaryUrl)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (raw == null) {
+                log.warn("РЎР»РѕРІР°СЂСЊ name_id -> hash_name РїСѓСЃС‚, РѕСЃС‚Р°РІР»СЏСЋ СЃС‚Р°СЂСѓСЋ РІРµСЂСЃРёСЋ");
+                return;
+            }
+
+            Object itemsNode = raw.containsKey("items") ? raw.get("items") : raw;
+
+            Map<Long, String> parsed = new HashMap<>();
+
+            if (itemsNode instanceof List<?> itemsList) {
+                for (Object item : itemsList) {
+                    if (!(item instanceof Map<?, ?> itemMap)) {
+                        continue;
+                    }
+                    Object idObj = itemMap.get("id");
+                    Object hashNameObj = itemMap.get("hash_name");
+                    if (idObj == null || hashNameObj == null) {
+                        continue;
+                    }
+                    try {
+                        long nameId = Long.parseLong(String.valueOf(idObj));
+                        parsed.put(nameId, String.valueOf(hashNameObj));
+                    } catch (NumberFormatException ignored) {
+                        // РїСЂРѕРїСѓСЃРєР°РµРј РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Рµ Р·Р°РїРёСЃРё
+                    }
+                }
+            } else if (itemsNode instanceof Map<?, ?> itemsMap) {
+                for (Map.Entry<?, ?> entry : itemsMap.entrySet()) {
+                    try {
+                        long nameId = Long.parseLong(String.valueOf(entry.getKey()));
+                        parsed.put(nameId, String.valueOf(entry.getValue()));
+                    } catch (NumberFormatException ignored) {
+                        // РїСЂРѕРїСѓСЃРєР°РµРј СЃР»СѓР¶РµР±РЅС‹Рµ РїРѕР»СЏ РІСЂРѕРґРµ "success"
+                    }
+                }
+            } else {
+                log.warn("РќРµРѕР¶РёРґР°РЅРЅС‹Р№ С‚РёРї items: {}", itemsNode == null ? "null" : itemsNode.getClass());
+                return;
+            }
+
+            if (parsed.isEmpty()) {
+                log.warn("РџРѕСЃР»Рµ РїР°СЂСЃРёРЅРіР° СЃР»РѕРІР°СЂСЊ РїСѓСЃС‚, РѕСЃС‚Р°РІР»СЏСЋ СЃС‚Р°СЂСѓСЋ РІРµСЂСЃРёСЋ");
+                return;
+            }
+
+            nameById.set(parsed);
+            log.info("РЎР»РѕРІР°СЂСЊ name_id -> hash_name РѕР±РЅРѕРІР»С‘РЅ, Р·Р°РїРёСЃРµР№: {}", parsed.size());
+        } catch (Exception e) {
+            log.error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ СЃР»РѕРІР°СЂСЊ name_id -> hash_name: {}", e.getMessage());
+        }
+    }
+
+    public String resolve(long nameId) {
+        return nameById.get().get(nameId);
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\service\SkinPriceService.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import org.example.handkerskinsproject.dto.MarketItemPriceDto;
+import org.example.handkerskinsproject.dto.MarketPricesResponse;
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.example.handkerskinsproject.entity.SkinPriceHistoryEntity;
+import org.example.handkerskinsproject.fetcher.MarketCsgoFetcherClient;
+import org.example.handkerskinsproject.repository.SkinPriceHistoryRepository;
+import org.example.handkerskinsproject.repository.SkinRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+@Service
+public class SkinPriceService {
+
+    private static final Logger log = LoggerFactory.getLogger(SkinPriceService.class);
+
+    private final SkinRepository skinRepository;
+    private final SkinPriceHistoryRepository historyRepository;
+    private final MarketCsgoFetcherClient fetcherClient;
+
+    private static final BigDecimal MIN_TRACK_PRICE = new BigDecimal("500");
+    private static final BigDecimal MAX_TRACK_PRICE = new BigDecimal("15000");
+
+    public SkinPriceService(
+            SkinRepository skinRepository,
+            SkinPriceHistoryRepository historyRepository,
+            MarketCsgoFetcherClient fetcherClient) {
+        this.skinRepository = skinRepository;
+        this.historyRepository = historyRepository;
+        this.fetcherClient = fetcherClient;
+    }
+
+    @Transactional(readOnly = true)
+    public List<SkinEntity> getAllTrackedSkins() {
+        return skinRepository.findAll();
+    }
+
+    @Transactional
+    public void syncPrices() {
+        List<SkinEntity> trackedSkins = skinRepository.findAll();
+        if (trackedSkins.isEmpty()) {
+            log.info("РўР°Р±Р»РёС†Р° РѕС‚СЃР»РµР¶РёРІР°РµРјС‹С… СЃРєРёРЅРѕРІ РїСѓСЃС‚Р°. РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РїСЂРѕРїСѓС‰РµРЅР°.");
+            return;
+        }
+
+        log.info("Р—Р°РіСЂСѓР·РєР° С†РµРЅ СЃ Market.CSGO РґР»СЏ {} СЃРєРёРЅРѕРІ...", trackedSkins.size());
+
+        MarketPricesResponse response = fetcherClient.fetchAllPrices();
+        if (response == null || !response.success() || response.items() == null) {
+            log.error("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ С†РµРЅС‹ РѕС‚ Market.CSGO");
+            return;
+        }
+
+        Map<String, MarketItemPriceDto> itemsMap = response.items().stream()
+                .collect(Collectors.toMap(
+                        MarketItemPriceDto::marketHashName,
+                        Function.identity(),
+                        (existing, replacement) -> existing
+                ));
+
+        Map<String, MarketItemPriceDto> pricesMap = fetcherClient.fetchPricesMap();
+        Map<String, BigDecimal> ordersMap = fetcherClient.fetchTopOrdersMap();
+
+        for (SkinEntity skin : trackedSkins) {
+            MarketItemPriceDto priceDto = pricesMap.get(skin.getMarketHashName());
+            BigDecimal topOrder = ordersMap.getOrDefault(skin.getMarketHashName(), BigDecimal.ZERO);
+
+            if (priceDto != null) {
+                SkinPriceHistoryEntity history = new SkinPriceHistoryEntity();
+                history.setSkin(skin);
+                history.setMinPrice(priceDto.minPrice() != null ? priceDto.minPrice() : BigDecimal.ZERO);
+                history.setVolume(priceDto.volume() != null ? priceDto.volume() : 0);
+                history.setTopOrder(topOrder);
+
+                historyRepository.save(history);
+            }
+        }
+    }
+
+    @Transactional
+    public SkinEntity addSkinToTrack(String marketHashName) {
+        return skinRepository.findByMarketHashName(marketHashName)
+                .orElseGet(() -> {
+                    BigDecimal price = resolveCurrentPrice(marketHashName);
+                    validatePriceInRange(marketHashName, price);
+                    return skinRepository.save(new SkinEntity(marketHashName));
+                });
+    }
+
+    private BigDecimal resolveCurrentPrice(String marketHashName) {
+        MarketItemPriceDto dto = fetcherClient.fetchPricesMap().get(marketHashName);
+        if (dto == null || dto.minPrice() == null) {
+            throw new IllegalArgumentException(
+                    "РќРµ СѓРґР°Р»РѕСЃСЊ РЅР°Р№С‚Рё С†РµРЅСѓ РґР»СЏ \"" + marketHashName + "\" вЂ” РїСЂРѕРІРµСЂСЊ С‚РѕС‡РЅРѕРµ РЅР°Р·РІР°РЅРёРµ СЃРєРёРЅР°");
+        }
+        return dto.minPrice();
+    }
+
+    private void validatePriceInRange(String marketHashName, BigDecimal price) {
+        if (price.compareTo(MIN_TRACK_PRICE) < 0 || price.compareTo(MAX_TRACK_PRICE) > 0) {
+            throw new IllegalArgumentException(String.format(
+                    "%s СЃС‚РѕРёС‚ %sв‚Ѕ вЂ” РІРЅРµ РґРёР°РїР°Р·РѕРЅР° РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ [%sв‚Ѕ, %sв‚Ѕ]",
+                    marketHashName, price, MIN_TRACK_PRICE, MAX_TRACK_PRICE));
+        }
+    }
+
+    @Transactional
+    public List<SkinEntity> importSkinsInPriceRange(BigDecimal minPrice, BigDecimal maxPrice) {
+        Map<String, MarketItemPriceDto> pricesMap = fetcherClient.fetchPricesMap();
+        if (pricesMap.isEmpty()) {
+            log.warn("РњР°СЃСЃРѕРІС‹Р№ РёРјРїРѕСЂС‚: РЅРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ СЃРїРёСЃРѕРє С†РµРЅ");
+            return List.of();
+        }
+
+        Set<String> alreadyTracked = skinRepository.findAll().stream()
+                .map(SkinEntity::getMarketHashName)
+                .collect(Collectors.toSet());
+
+        List<SkinEntity> toInsert = pricesMap.values().stream()
+                .filter(dto -> dto.minPrice() != null
+                        && dto.minPrice().compareTo(minPrice) >= 0
+                        && dto.minPrice().compareTo(maxPrice) <= 0)
+                .map(MarketItemPriceDto::marketHashName)
+                .filter(name -> !isExcludedCategory(name))   // <-- РЅРѕРІР°СЏ СЃС‚СЂРѕРєР°
+                .filter(name -> !alreadyTracked.contains(name))
+                .distinct()
+                .map(SkinEntity::new)
+                .toList();
+
+
+        if (toInsert.isEmpty()) {
+            log.info("РњР°СЃСЃРѕРІС‹Р№ РёРјРїРѕСЂС‚: РЅРѕРІС‹С… СЃРєРёРЅРѕРІ РІ РґРёР°РїР°Р·РѕРЅРµ {}-{}в‚Ѕ РЅРµ РЅР°Р№РґРµРЅРѕ", minPrice, maxPrice);
+            return List.of();
+        }
+
+        List<SkinEntity> saved = skinRepository.saveAll(toInsert);
+        log.info("РњР°СЃСЃРѕРІС‹Р№ РёРјРїРѕСЂС‚: РґРѕР±Р°РІР»РµРЅРѕ {} РЅРѕРІС‹С… СЃРєРёРЅРѕРІ РІ РґРёР°РїР°Р·РѕРЅРµ {}-{}в‚Ѕ", saved.size(), minPrice, maxPrice);
+        return saved;
+    }
+    private static final Set<String> EXCLUDED_HASH_PREFIXES = Set.of(
+            "Sticker | ",
+            "Patch | ",
+            "Music Kit | ",
+            "StatTrak\u2122 Music Kit | ",
+            "Sealed Graffiti | "
+    );
+
+    private static final Set<String> EXCLUDED_HASH_SUFFIXES = Set.of(
+            " Case",
+            " Capsule",
+            " Pin",
+            " Package"
+    );
+
+    private boolean isExcludedCategory(String marketHashName) {
+        for (String prefix : EXCLUDED_HASH_PREFIXES) {
+            if (marketHashName.startsWith(prefix)) {
+                return true;
+            }
+        }
+        for (String suffix : EXCLUDED_HASH_SUFFIXES) {
+            if (marketHashName.endsWith(suffix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\service\TopOrderCacheService.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import lombok.extern.slf4j.Slf4j;
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.example.handkerskinsproject.fetcher.MarketCsgoFetcherClient;
+import org.example.handkerskinsproject.repository.SkinRepository;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Service
+public class TopOrderCacheService {
+
+    private final MarketCsgoFetcherClient fetcherClient;
+    private final SkinRepository skinRepository;
+
+    private final AtomicReference<Map<String, BigDecimal>> topOrderByHashName =
+            new AtomicReference<>(Map.of());
+
+    public TopOrderCacheService(MarketCsgoFetcherClient fetcherClient, SkinRepository skinRepository) {
+        this.fetcherClient = fetcherClient;
+        this.skinRepository = skinRepository;
+    }
+
+    @Scheduled(fixedRate = 7000)
+    public void refresh() {
+        try {
+            Set<String> trackedNames = skinRepository.findAll().stream()
+                    .map(SkinEntity::getMarketHashName)
+                    .collect(Collectors.toSet());
+
+            if (trackedNames.isEmpty()) {
+                return;
+            }
+
+            Map<String, BigDecimal> allOrders = fetcherClient.fetchTopOrdersMap();
+
+            Map<String, BigDecimal> filtered = allOrders.entrySet().stream()
+                    .filter(e -> trackedNames.contains(e.getKey()))
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+
+            topOrderByHashName.set(filtered);
+            log.info("РљСЌС€ С‚РѕРї-РѕСЂРґРµСЂРѕРІ РѕР±РЅРѕРІР»С‘РЅ: {} РёР· {} РѕС‚СЃР»РµР¶РёРІР°РµРјС‹С… СЃРєРёРЅРѕРІ РёРјРµСЋС‚ Р°РєС‚РёРІРЅС‹Р№ РѕСЂРґРµСЂ",
+                    filtered.size(), trackedNames.size());
+            log.debug("РљСЌС€ С‚РѕРї-РѕСЂРґРµСЂРѕРІ (РїРѕР»РЅР°СЏ РєР°СЂС‚Р°): {}", filtered);
+        } catch (Exception e) {
+            log.error("РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ РєСЌС€ С‚РѕРї-РѕСЂРґРµСЂРѕРІ: {}", e.getMessage());
+        }
+    }
+
+    public BigDecimal getTopOrder(String marketHashName) {
+        return topOrderByHashName.get().get(marketHashName);
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\java\org\example\handkerskinsproject\HandkerSkinsProjectApplication.java
+=========================================
+package org.example.handkerskinsproject;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+@SpringBootApplication
+@EnableScheduling
+public class HandkerSkinsProjectApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(HandkerSkinsProjectApplication.class, args);
+    }
+}
+
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\resources\db\migration\V1__create_skin_prices_table.sql
+=========================================
+CREATE TABLE skin_prices (
+        id BIGSERIAL PRIMARY KEY,
+        market_hash_name VARCHAR(255) NOT NULL,
+        lowest_price VARCHAR(50),
+        volume VARCHAR(50),
+        fetched_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\resources\db\migration\V2__create_skins_and_history.sql
+=========================================
+CREATE TABLE IF NOT EXISTS skins (
+    id BIGSERIAL PRIMARY KEY,
+    market_hash_name VARCHAR(255) NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS skin_price_history (
+    id BIGSERIAL PRIMARY KEY,
+    skin_id BIGINT NOT NULL,
+    min_price DECIMAL(10, 2),
+    suggested_price DECIMAL(10, 2),
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_skin_price_history_skin FOREIGN KEY (skin_id) REFERENCES skins (id) ON DELETE CASCADE
+);
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\resources\db\migration\V3__update_skin_price_history_columns.sql
+=========================================
+DROP TABLE IF EXISTS skin_price_history CASCADE;
+DROP TABLE IF EXISTS skins CASCADE;
+
+CREATE TABLE skins (
+                       id BIGSERIAL PRIMARY KEY,
+                       market_hash_name VARCHAR(255) NOT NULL UNIQUE
+);
+
+CREATE TABLE skin_price_history (
+                                    id BIGSERIAL PRIMARY KEY,
+                                    skin_id BIGINT NOT NULL,
+                                    min_price DECIMAL(10, 2),
+                                    top_order DECIMAL(10, 2),
+                                    volume INT,
+                                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                                    CONSTRAINT fk_skin_price_history_skin FOREIGN KEY (skin_id) REFERENCES skins (id) ON DELETE CASCADE
+);
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\main\resources\application.properties
+=========================================
+spring.application.name=HandkerSkinsProject
+
+# ??????????? ? ???? ??????
+spring.datasource.url=jdbc:postgresql://localhost:5432/handlerskins_db
+spring.datasource.username=postgres
+spring.datasource.password=Listikplayz1
+spring.datasource.driver-class-name=org.postgresql.Driver
+
+# JPA / Hibernate
+spring.jpa.hibernate.ddl-auto=validate
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.format_sql=true
+
+# ????????? Flyway
+spring.flyway.enabled=true
+spring.flyway.baseline-on-migrate=true
+
+# ????????? ??????
+telegram.bot.token=8908717652:AAEp0HVtJA-hKfFQh0dHyfoC7018gXKgERg
+telegram.bot.username=AnomalyNotificationSkins
+telegram.bot.chat-id=5508848197
+
+spring.jpa.open-in-view=false
+
+# csgo market
+market-csgo.api.base-url=https://market.csgo.com/api/v2
+market-csgo.api.key=x21a3C9T5xt3O2Q4cRQ7427n2Jce6w8
+
+# websocket
+market-csgo.ws.url=wss://wsprice.csgo.com/connection/websocket
+market-csgo.buy.dry-run=true
+
+logging.file.name=logs/handkerskins.log
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\test\java\org\example\handkerskinsproject\anomalydetection\AnomalyDetectionServiceTest.java
+=========================================
+package org.example.handkerskinsproject.anomalydetection;
+
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.example.handkerskinsproject.entity.SkinPriceHistoryEntity;
+import org.example.handkerskinsproject.notification.TelegramNotificationService;
+import org.example.handkerskinsproject.repository.SkinPriceHistoryRepository;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.math.BigDecimal;
+import java.util.Optional;
+
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class AnomalyDetectionServiceTest {
+
+    @Mock
+    private SkinPriceHistoryRepository historyRepository;
+
+    @Mock
+    private TelegramNotificationService notificationService; // <-- Р”РћР‘РђР’Р¬РўР• Р­РўРЈ РЎРўР РћР§РљРЈ
+
+    @InjectMocks
+    private AnomalyDetectionService anomalyDetectionService;
+
+    @Test
+    @DisplayName("Р”РѕР»Р¶РµРЅ РѕР±РЅР°СЂСѓР¶РёС‚СЊ Р°РЅРѕРјР°Р»СЊРЅС‹Р№ РїСЂРѕС„РёС‚ СЃ СѓС‡РµС‚РѕРј РєРѕРјРёСЃСЃРёРё 12%")
+    void shouldDetectProfitableAnomaly() {
+        SkinEntity skin = new SkinEntity();
+        skin.setMarketHashName("AK-47 | Redline (Field-Tested)");
+
+        BigDecimal currentMinPrice = new BigDecimal("70.00");
+        BigDecimal suggestedPrice = new BigDecimal("100.00");
+
+        when(historyRepository.findFirstBySkinOrderByIdDesc(skin)).thenReturn(Optional.empty());
+
+        anomalyDetectionService.checkForAnomalies(skin, currentMinPrice, suggestedPrice);
+        verify(notificationService).sendNotification(anyString());
+    }
+
+    @Test
+    @DisplayName("Р”РѕР»Р¶РµРЅ РѕР±РЅР°СЂСѓР¶РёС‚СЊ РїР°РґРµРЅРёРµ С†РµРЅС‹ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ РёСЃС‚РѕСЂРёРё")
+    void shouldDetectPriceDropFromHistory() {
+        SkinEntity skin = new SkinEntity();
+        skin.setMarketHashName("AWP | Asiimov (Field-Tested)");
+
+        SkinPriceHistoryEntity oldHistory = new SkinPriceHistoryEntity();
+        oldHistory.setMinPrice(new BigDecimal("100.00"));
+
+        when(historyRepository.findFirstBySkinOrderByIdDesc(skin))
+                .thenReturn(Optional.of(oldHistory));
+
+        BigDecimal currentMinPrice = new BigDecimal("85.00");
+        BigDecimal suggestedPrice = new BigDecimal("90.00");
+
+        anomalyDetectionService.checkForAnomalies(skin, currentMinPrice, suggestedPrice);
+
+        verify(notificationService).sendNotification(anyString());
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\test\java\org\example\handkerskinsproject\fetcher\MarketCsgoFetcherClientTest.java
+=========================================
+package org.example.handkerskinsproject.fetcher;
+
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
+import org.example.handkerskinsproject.dto.MarketItemPriceDto;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.web.client.RestClient;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class MarketCsgoFetcherClientTest {
+
+    private MockWebServer mockWebServer;
+    private MarketCsgoFetcherClient fetcherClient;
+
+    @BeforeEach
+    void setUp() throws IOException {
+        mockWebServer = new MockWebServer();
+        mockWebServer.start();
+
+        RestClient.Builder builder = RestClient.builder()
+                .requestFactory(new JdkClientHttpRequestFactory());
+
+        fetcherClient = new MarketCsgoFetcherClient(
+                builder, mockWebServer.url("/").toString().replaceAll("/$", ""), "test-key");
+    }
+
+    @AfterEach
+    void tearDown() throws IOException {
+        mockWebServer.shutdown();
+    }
+
+    @Test
+    void fetchAllPrices_returnsParsedResponse() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"items\":[]}"));
+
+        var response = fetcherClient.fetchAllPrices();
+
+        assertTrue(response.success());
+        assertTrue(response.items().isEmpty());
+    }
+
+    @Test
+    void fetchPricesMap_buildsMapByHashNameAndKeepsFirstOnDuplicate() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"success":true,"items":[
+                          {"market_hash_name":"AK-47 | Redline (Field-Tested)","price":1000,"volume":5},
+                          {"market_hash_name":"AK-47 | Redline (Field-Tested)","price":2000,"volume":1}
+                        ]}
+                        """));
+
+        Map<String, MarketItemPriceDto> result = fetcherClient.fetchPricesMap();
+
+        assertEquals(1, result.size());
+        assertEquals(new BigDecimal("1000"), result.get("AK-47 | Redline (Field-Tested)").minPrice());
+    }
+
+    @Test
+    void fetchPricesMap_onServerError_returnsEmptyMap() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(500));
+
+        assertTrue(fetcherClient.fetchPricesMap().isEmpty());
+    }
+
+    @Test
+    void fetchTopOrdersMap_parsesOrdersAndDefaultsNullToZero() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"success":true,"items":[
+                          {"market_hash_name":"AK-47 | Redline (Field-Tested)","price":900},
+                          {"market_hash_name":"AWP | Asiimov (Field-Tested)","price":null}
+                        ]}
+                        """));
+
+        Map<String, BigDecimal> result = fetcherClient.fetchTopOrdersMap();
+
+        assertEquals(new BigDecimal("900"), result.get("AK-47 | Redline (Field-Tested)"));
+        assertEquals(BigDecimal.ZERO, result.get("AWP | Asiimov (Field-Tested)"));
+    }
+
+    @Test
+    void fetchTopOrdersMap_onServerError_returnsEmptyMap() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(500));
+
+        assertTrue(fetcherClient.fetchTopOrdersMap().isEmpty());
+    }
+
+    @Test
+    void sendPing_sendsRequestWithApiKey() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200));
+
+        fetcherClient.sendPing();
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertTrue(request.getPath().contains("key=test-key"));
+        assertTrue(request.getPath().contains("v=2"));
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\test\java\org\example\handkerskinsproject\fetcher\MarketWebSocketClientTest.java
+=========================================
+package org.example.handkerskinsproject.fetcher;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.handkerskinsproject.notification.TelegramNotificationService;
+import org.example.handkerskinsproject.service.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.lang.reflect.Field;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.util.List;
+import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class MarketWebSocketClientTest {
+
+    @Mock private MarketAuthService authService;
+    @Mock private SkinPriceService skinPriceService;
+    @Mock private NameDictionaryService nameDictionary;
+    @Mock private TopOrderCacheService topOrderCache;
+    @Mock private MinPriceCacheService minPriceCache;   // в†ђ РќРћР’Р«Р™ РјРѕРє
+    @Mock private MarketBuyService buyService;
+    @Mock private TelegramNotificationService notificationService;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    // РІС‹РїРѕР»РЅСЏРµРј "Р°СЃРёРЅС…СЂРѕРЅРЅСѓСЋ" РїРѕРєСѓРїРєСѓ СЃРёРЅС…СЂРѕРЅРЅРѕ, С‡С‚РѕР±С‹ С‚РµСЃС‚ РЅРµ РіРѕРЅСЏР»СЃСЏ Р·Р° РїРѕС‚РѕРєР°РјРё
+    private final ExecutorService directExecutor = new AbstractExecutorService() {
+        @Override public void shutdown() {}
+        @Override public List<Runnable> shutdownNow() { return List.of(); }
+        @Override public boolean isShutdown() { return false; }
+        @Override public boolean isTerminated() { return false; }
+        @Override public boolean awaitTermination(long timeout, TimeUnit unit) { return true; }
+        @Override public void execute(Runnable command) { command.run(); }
+    };
+
+    private MarketWebSocketClient client;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        client = new MarketWebSocketClient(
+                new URI("wss://example.invalid/ws"),
+                authService, objectMapper, skinPriceService, nameDictionary, topOrderCache,
+                minPriceCache,   // в†ђ РќРћР’Р«Р™ Р°СЂРіСѓРјРµРЅС‚
+                buyService, notificationService, directExecutor
+        );
+        // РёРјРёС‚РёСЂСѓРµРј, С‡С‚Рѕ РїРѕРґРїРёСЃРєР° РїСЂРѕС€Р»Р° РґР°РІРЅРѕ вЂ” РёРЅР°С‡Рµ warm-up-РіРµР№С‚ Р±Р»РѕРєРёСЂСѓРµС‚ Р»СЋР±РѕР№ РєР°РЅРґРёРґР°С‚
+        Field subscribedAtMillisField = MarketWebSocketClient.class.getDeclaredField("subscribedAtMillis");
+        subscribedAtMillisField.setAccessible(true);
+        subscribedAtMillisField.set(client, System.currentTimeMillis() - 61_000);
+    }
+
+    private String wsMessage(String event, long nameId, String price, String itemId) {
+        StringBuilder data = new StringBuilder();
+        data.append("\"event\":\"").append(event).append("\",");
+        data.append("\"name_id\":").append(nameId).append(",");
+        data.append("\"price\":\"").append(price).append("\"");
+        if (itemId != null) {
+            data.append(",\"id\":\"").append(itemId).append("\"");
+        }
+        return "{\"push\":{\"pub\":{\"data\":{" + data + "}}}}";
+    }
+
+    @Test
+    void duringWarmup_doesNotBuyEvenIfPriceMatches() throws Exception {
+        MarketWebSocketClient freshClient = new MarketWebSocketClient(
+                new URI("wss://example.invalid/ws"),
+                authService, objectMapper, skinPriceService, nameDictionary, topOrderCache,
+                minPriceCache,
+                buyService, notificationService, directExecutor
+        );
+        Field field = MarketWebSocketClient.class.getDeclaredField("subscribedAtMillis");
+        field.setAccessible(true);
+        field.set(freshClient, System.currentTimeMillis());
+
+        freshClient.onMessage(wsMessage("new", 42L, "1050", "lot-warmup"));
+
+        verifyNoInteractions(buyService, notificationService);
+    }
+
+    @Test
+    void priceInsideMarginBand_triggersBuyAndSuccessNotification() {
+        when(nameDictionary.resolve(42L)).thenReturn("AK-47 | Redline (Field-Tested)");
+        when(topOrderCache.getTopOrder("AK-47 | Redline (Field-Tested)")).thenReturn(new BigDecimal("1000"));
+        when(buyService.buyItem(eq("lot-1"), any(BigDecimal.class)))
+                .thenReturn(new MarketBuyService.BuyResult(true, "OK", "auto-123"));
+
+        client.onMessage(wsMessage("new", 42L, "1050", "lot-1"));
+
+        verify(buyService).buyItem(eq("lot-1"), eq(new BigDecimal("1050")));
+        verify(notificationService).sendNotification(contains("Р›РћРў Р’Р«РљРЈРџР›Р•Рќ"));
+    }
+
+    @Test
+    void priceBelowMarginBand_doesNotBuy() {
+        when(nameDictionary.resolve(42L)).thenReturn("AK-47 | Redline (Field-Tested)");
+        when(topOrderCache.getTopOrder("AK-47 | Redline (Field-Tested)")).thenReturn(new BigDecimal("1000"));
+
+        client.onMessage(wsMessage("new", 42L, "1010", "lot-2")); // < 1030
+
+        verifyNoInteractions(buyService);
+        verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    void priceAboveMarginBand_doesNotBuy() {
+        when(nameDictionary.resolve(42L)).thenReturn("AK-47 | Redline (Field-Tested)");
+        when(topOrderCache.getTopOrder("AK-47 | Redline (Field-Tested)")).thenReturn(new BigDecimal("1000"));
+
+        client.onMessage(wsMessage("new", 42L, "1200", "lot-3")); // > 1070
+
+        verifyNoInteractions(buyService);
+    }
+
+    @Test
+    void unknownNameId_doesNotBuy() {
+        when(nameDictionary.resolve(42L)).thenReturn(null);
+
+        client.onMessage(wsMessage("new", 42L, "1050", "lot-4"));
+
+        verifyNoInteractions(topOrderCache);
+        verifyNoInteractions(buyService);
+    }
+
+    @Test
+    void noCachedTopOrder_doesNotBuy() {
+        when(nameDictionary.resolve(42L)).thenReturn("AK-47 | Redline (Field-Tested)");
+        when(topOrderCache.getTopOrder("AK-47 | Redline (Field-Tested)")).thenReturn(null);
+
+        client.onMessage(wsMessage("new", 42L, "1050", "lot-5"));
+
+        verifyNoInteractions(buyService);
+    }
+
+    @Test
+    void missingItemId_doesNotBuyAndDoesNotThrow() {
+        assertDoesNotThrow(() -> client.onMessage(wsMessage("new", 42L, "1050", null)));
+
+        verifyNoInteractions(nameDictionary);
+        verifyNoInteractions(topOrderCache);
+        verifyNoInteractions(buyService);
+    }
+
+    @Test
+    void duplicateEventsForSameItemId_onlyBuysOnce() {
+        when(nameDictionary.resolve(42L)).thenReturn("AK-47 | Redline (Field-Tested)");
+        when(topOrderCache.getTopOrder("AK-47 | Redline (Field-Tested)")).thenReturn(new BigDecimal("1000"));
+        when(buyService.buyItem(eq("lot-dup"), any(BigDecimal.class)))
+                .thenReturn(new MarketBuyService.BuyResult(true, "OK", "auto-1"));
+
+        client.onMessage(wsMessage("new", 42L, "1050", "lot-dup"));
+        client.onMessage(wsMessage("change", 42L, "1050", "lot-dup"));
+
+        verify(buyService, times(1)).buyItem(eq("lot-dup"), any(BigDecimal.class));
+    }
+
+    @Test
+    void irrelevantEventType_doesNotBuy() {
+        client.onMessage(wsMessage("sold", 42L, "1050", "lot-6"));
+
+        verifyNoInteractions(nameDictionary);
+        verifyNoInteractions(buyService);
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\test\java\org\example\handkerskinsproject\service\MarketAuthServiceTest.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.client.RestClient;
+
+import java.io.IOException;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class MarketAuthServiceTest {
+
+    private MockWebServer mockWebServer;
+    private MarketAuthService authService;
+
+    @BeforeEach
+    void setUp() throws IOException {
+        mockWebServer = new MockWebServer();
+        mockWebServer.start();
+
+        RestClient.Builder builder = RestClient.builder()
+                .requestFactory(new JdkClientHttpRequestFactory());
+
+        authService = new MarketAuthService(builder);
+        ReflectionTestUtils.setField(authService, "baseUrl", mockWebServer.url("/").toString().replaceAll("/$", ""));
+        ReflectionTestUtils.setField(authService, "apiKey", "test-key");
+    }
+
+    @AfterEach
+    void tearDown() throws IOException {
+        mockWebServer.shutdown();
+    }
+
+    @Test
+    void fetchFreshWsToken_returnsTokenOnSuccess() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"token\":\"abc123\"}"));
+
+        String token = authService.fetchFreshWsToken();
+
+        assertEquals("abc123", token);
+    }
+
+    @Test
+    void fetchFreshWsToken_throwsWhenSuccessIsFalse() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":false,\"error\":\"bad key\"}"));
+
+        assertThrows(RuntimeException.class, () -> authService.fetchFreshWsToken());
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\test\java\org\example\handkerskinsproject\service\MarketBuyServiceTest.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.client.RestClient;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class MarketBuyServiceTest {
+
+    private MockWebServer mockWebServer;
+    private MarketBuyService buyService;
+
+    @BeforeEach
+    void setUp() throws IOException {
+        mockWebServer = new MockWebServer();
+        mockWebServer.start();
+
+        RestClient.Builder builder = RestClient.builder()
+                .requestFactory(new JdkClientHttpRequestFactory());
+
+        buyService = new MarketBuyService(builder);
+        ReflectionTestUtils.setField(buyService, "baseUrl",
+                mockWebServer.url("/").toString().replaceAll("/$", ""));
+        ReflectionTestUtils.setField(buyService, "apiKey", "test-key");
+    }
+
+    @AfterEach
+    void tearDown() throws IOException {
+        mockWebServer.shutdown();
+    }
+
+    @Test
+    void buyItem_sendsCorrectRequestAndParsesSuccess() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true}"));
+
+        MarketBuyService.BuyResult result = buyService.buyItem("123456789012345", new BigDecimal("150.50"));
+
+        assertTrue(result.success());
+        assertEquals("OK", result.message());
+        assertTrue(result.customId().startsWith("auto-"));
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertTrue(request.getPath().contains("id=123456789012345"));
+        assertTrue(request.getPath().contains("price=15050")); // 150.50 СЂСѓР± -> 15050 РєРѕРїРµРµРє
+        assertTrue(request.getPath().contains("key=test-key"));
+    }
+
+    @Test
+    void buyItem_returnsFailureWhenMarketReportsError() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":false,\"error\":\"item_not_found\"}"));
+
+        MarketBuyService.BuyResult result = buyService.buyItem("999", new BigDecimal("10.00"));
+
+        assertFalse(result.success());
+        assertEquals("item_not_found", result.message());
+    }
+
+    @Test
+    void buyItem_handlesNetworkFailureGracefully() throws IOException {
+        mockWebServer.shutdown(); // СЃРµСЂРІРµСЂ РЅРµРґРѕСЃС‚СѓРїРµРЅ
+
+        MarketBuyService.BuyResult result = buyService.buyItem("1", new BigDecimal("5.00"));
+
+        assertFalse(result.success());
+        assertNotNull(result.message());
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\test\java\org\example\handkerskinsproject\service\NameDictionaryServiceTest.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.client.RestClient;
+
+import java.io.IOException;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class NameDictionaryServiceTest {
+
+    private MockWebServer mockWebServer;
+    private NameDictionaryService service;
+
+    @BeforeEach
+    void setUp() throws IOException {
+        mockWebServer = new MockWebServer();
+        mockWebServer.start();
+
+        RestClient.Builder builder = RestClient.builder()
+                .requestFactory(new JdkClientHttpRequestFactory());
+
+        service = new NameDictionaryService(builder);
+        ReflectionTestUtils.setField(service, "dictionaryUrl", mockWebServer.url("/dictionary.json").toString());
+    }
+
+    @AfterEach
+    void tearDown() throws IOException {
+        mockWebServer.shutdown();
+    }
+
+    @Test
+    void refresh_loadsListOfItemsAndResolveWorks() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"success":true,"time":1234567890,"items":[
+                          {"id":628235,"hash_name":"#CSGO_crate_musickit_masterminds2_capsule"},
+                          {"id":12345,"hash_name":"AK-47 | Redline (Field-Tested)"}
+                        ]}
+                        """));
+
+        service.refresh();
+
+        assertEquals("AK-47 | Redline (Field-Tested)", service.resolve(12345L));
+        assertEquals("#CSGO_crate_musickit_masterminds2_capsule", service.resolve(628235L));
+        assertNull(service.resolve(99999L));
+    }
+
+    @Test
+    void resolve_beforeAnyRefresh_returnsNull() {
+        assertNull(service.resolve(12345L));
+    }
+
+    @Test
+    void refresh_onServerError_keepsPreviousDictionaryAndDoesNotThrow() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"items\":[{\"id\":12345,\"hash_name\":\"AK-47 | Redline (Field-Tested)\"}]}"));
+        service.refresh();
+        assertEquals("AK-47 | Redline (Field-Tested)", service.resolve(12345L));
+
+        mockWebServer.enqueue(new MockResponse().setResponseCode(500));
+
+        assertDoesNotThrow(() -> service.refresh());
+        assertEquals("AK-47 | Redline (Field-Tested)", service.resolve(12345L)); // СЃС‚Р°СЂС‹Р№ СЃР»РѕРІР°СЂСЊ РЅРµ Р·Р°С‚С‘СЂСЃСЏ
+    }
+
+    @Test
+    void refresh_skipsItemsWithMissingFields() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"success":true,"items":[
+                          {"id":12345,"hash_name":"AK-47 | Redline (Field-Tested)"},
+                          {"id":99999}
+                        ]}
+                        """));
+
+        service.refresh();
+
+        assertEquals("AK-47 | Redline (Field-Tested)", service.resolve(12345L));
+        assertNull(service.resolve(99999L));
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\test\java\org\example\handkerskinsproject\service\SkinPriceServiceTest.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import org.example.handkerskinsproject.dto.MarketItemPriceDto;
+import org.example.handkerskinsproject.dto.MarketPricesResponse;
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.example.handkerskinsproject.entity.SkinPriceHistoryEntity;
+import org.example.handkerskinsproject.fetcher.MarketCsgoFetcherClient;
+import org.example.handkerskinsproject.repository.SkinPriceHistoryRepository;
+import org.example.handkerskinsproject.repository.SkinRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class SkinPriceServiceTest {
+
+    @Mock private SkinRepository skinRepository;
+    @Mock private SkinPriceHistoryRepository historyRepository;
+    @Mock private MarketCsgoFetcherClient fetcherClient;
+
+    private SkinPriceService service;
+
+    @BeforeEach
+    void setUp() {
+        service = new SkinPriceService(skinRepository, historyRepository, fetcherClient);
+    }
+
+    @Test
+    void syncPrices_withNoTrackedSkins_skipsAndDoesNotCallFetcher() {
+        when(skinRepository.findAll()).thenReturn(List.of());
+
+        service.syncPrices();
+
+        verifyNoInteractions(fetcherClient);
+        verifyNoInteractions(historyRepository);
+    }
+
+    @Test
+    void syncPrices_savesHistoryWithPriceVolumeAndTopOrder() {
+        SkinEntity skin = new SkinEntity("AK-47 | Redline (Field-Tested)");
+        when(skinRepository.findAll()).thenReturn(List.of(skin));
+        when(fetcherClient.fetchAllPrices()).thenReturn(new MarketPricesResponse(true, List.of()));
+        when(fetcherClient.fetchPricesMap()).thenReturn(Map.of(
+                "AK-47 | Redline (Field-Tested)",
+                new MarketItemPriceDto("AK-47 | Redline (Field-Tested)", new BigDecimal("1500.00"), 7)
+        ));
+        when(fetcherClient.fetchTopOrdersMap()).thenReturn(Map.of(
+                "AK-47 | Redline (Field-Tested)", new BigDecimal("1400.00")
+        ));
+
+        service.syncPrices();
+
+        ArgumentCaptor<SkinPriceHistoryEntity> captor = ArgumentCaptor.forClass(SkinPriceHistoryEntity.class);
+        verify(historyRepository).save(captor.capture());
+
+        SkinPriceHistoryEntity saved = captor.getValue();
+        assertEquals(skin, saved.getSkin());
+        assertEquals(new BigDecimal("1500.00"), saved.getMinPrice());
+        assertEquals(7, saved.getVolume());
+        assertEquals(new BigDecimal("1400.00"), saved.getTopOrder());
+    }
+
+    @Test
+    void syncPrices_skinWithoutPriceData_isSkipped() {
+        SkinEntity skin = new SkinEntity("Untracked Anywhere | Skin");
+        when(skinRepository.findAll()).thenReturn(List.of(skin));
+        when(fetcherClient.fetchAllPrices()).thenReturn(new MarketPricesResponse(true, List.of()));
+        when(fetcherClient.fetchPricesMap()).thenReturn(Map.of());
+        when(fetcherClient.fetchTopOrdersMap()).thenReturn(Map.of());
+
+        service.syncPrices();
+
+        verifyNoInteractions(historyRepository);
+    }
+
+    @Test
+    void syncPrices_whenFetchAllPricesUnsuccessful_doesNotThrowAndSkipsSaving() {
+        when(skinRepository.findAll()).thenReturn(List.of(new SkinEntity("AK-47 | Redline (Field-Tested)")));
+        when(fetcherClient.fetchAllPrices()).thenReturn(new MarketPricesResponse(false, null));
+
+        assertDoesNotThrow(() -> service.syncPrices());
+
+        verifyNoInteractions(historyRepository);
+    }
+
+    @Test
+    void addSkinToTrack_returnsExistingSkinIfAlreadyTracked() {
+        SkinEntity existing = new SkinEntity("AK-47 | Redline (Field-Tested)");
+        when(skinRepository.findByMarketHashName("AK-47 | Redline (Field-Tested)")).thenReturn(Optional.of(existing));
+
+        SkinEntity result = service.addSkinToTrack("AK-47 | Redline (Field-Tested)");
+
+        assertSame(existing, result);
+        verify(skinRepository, never()).save(any());
+    }
+
+    @Test
+    void addSkinToTrack_createsNewSkinIfNotTracked() {
+        when(skinRepository.findByMarketHashName("New Skin")).thenReturn(Optional.empty());
+        when(skinRepository.save(any(SkinEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        SkinEntity result = service.addSkinToTrack("New Skin");
+
+        assertEquals("New Skin", result.getMarketHashName());
+        verify(skinRepository).save(any(SkinEntity.class));
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\test\java\org\example\handkerskinsproject\service\TopOrderCacheServiceTest.java
+=========================================
+package org.example.handkerskinsproject.service;
+
+import org.example.handkerskinsproject.entity.SkinEntity;
+import org.example.handkerskinsproject.fetcher.MarketCsgoFetcherClient;
+import org.example.handkerskinsproject.repository.SkinRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class TopOrderCacheServiceTest {
+
+    @Mock private MarketCsgoFetcherClient fetcherClient;
+    @Mock private SkinRepository skinRepository;
+
+    private TopOrderCacheService cacheService;
+
+    @BeforeEach
+    void setUp() {
+        cacheService = new TopOrderCacheService(fetcherClient, skinRepository);
+    }
+
+    @Test
+    void refresh_withNoTrackedSkins_doesNotCallFetcher() {
+        when(skinRepository.findAll()).thenReturn(List.of());
+
+        cacheService.refresh();
+
+        verifyNoInteractions(fetcherClient);
+        assertNull(cacheService.getTopOrder("AK-47 | Redline (Field-Tested)"));
+    }
+
+    @Test
+    void refresh_keepsOnlyTrackedSkinsInCache() {
+        when(skinRepository.findAll()).thenReturn(List.of(
+                new SkinEntity("AK-47 | Redline (Field-Tested)"),
+                new SkinEntity("AWP | Asiimov (Field-Tested)")
+        ));
+        when(fetcherClient.fetchTopOrdersMap()).thenReturn(Map.of(
+                "AK-47 | Redline (Field-Tested)", new BigDecimal("1000"),
+                "AWP | Asiimov (Field-Tested)", new BigDecimal("2000"),
+                "Untracked Skin", new BigDecimal("500")
+        ));
+
+        cacheService.refresh();
+
+        assertEquals(new BigDecimal("1000"), cacheService.getTopOrder("AK-47 | Redline (Field-Tested)"));
+        assertEquals(new BigDecimal("2000"), cacheService.getTopOrder("AWP | Asiimov (Field-Tested)"));
+        assertNull(cacheService.getTopOrder("Untracked Skin"));
+    }
+
+    @Test
+    void refresh_whenFetcherThrows_doesNotPropagateException() {
+        when(skinRepository.findAll()).thenReturn(List.of(new SkinEntity("AK-47 | Redline (Field-Tested)")));
+        when(fetcherClient.fetchTopOrdersMap()).thenThrow(new RuntimeException("boom"));
+
+        assertDoesNotThrow(() -> cacheService.refresh());
+        assertNull(cacheService.getTopOrder("AK-47 | Redline (Field-Tested)"));
+    }
+
+    @Test
+    void getTopOrder_returnsNullBeforeAnyRefresh() {
+        assertNull(cacheService.getTopOrder("Anything"));
+    }
+}
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\src\test\java\org\example\handkerskinsproject\HandkerSkinsProjectApplicationTests.java
+=========================================
+package org.example.handkerskinsproject;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+
+@SpringBootTest
+class HandkerSkinsProjectApplicationTests {
+
+    @Test
+    void contextLoads() {
+    }
+
+}
+
+
+
+
+=========================================
+FILE: C:\Users\VlADISLAV\IdeaProjects\HandkerSkinsProject\pom.xml
+=========================================
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>org.example</groupId>
+    <artifactId>HandkerSkinsProject</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>HandkerSkinsProject</name>
+    <description>HandkerSkinsProject</description>
+    <url/>
+    <licenses>
+        <license/>
+    </licenses>
+    <developers>
+        <developer/>
+    </developers>
+    <scm>
+        <connection/>
+        <developerConnection/>
+        <tag/>
+        <url/>
+    </scm>
+    <properties>
+        <java.version>21</java.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>mockwebserver</artifactId>
+            <version>4.12.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+            <version>1.5.6</version>
+        </dependency>
+        <dependency>
+            <groupId>org.telegram</groupId>
+            <artifactId>telegrambots-client</artifactId>
+            <version>7.2.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.telegram</groupId>
+            <artifactId>telegrambots-springboot-longpolling-starter</artifactId>
+            <version>7.2.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.brotli</groupId>
+            <artifactId>dec</artifactId>
+            <version>0.1.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-compile</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>org.projectlombok</groupId>
+                                    <artifactId>lombok</artifactId>
+                                </path>
+                            </annotationProcessorPaths>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <phase>test-compile</phase>
+                        <goals>
+                            <goal>testCompile</goal>
+                        </goals>
+                        <configuration>
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>org.projectlombok</groupId>
+                                    <artifactId>lombok</artifactId>
+                                </path>
+                            </annotationProcessorPaths>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
+
+
+
+

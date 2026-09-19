@@ -1,0 +1,26 @@
+### 1. Добавить AK-47 | Redline (Field-Tested) в отслеживание
+POST {{baseUrl}}/api/v1/skins?name=AK-47%20%7C%20Redline%20(Field-Tested)
+
+### 2. Добавить AWP | Asiimov (Field-Tested) в отслеживание
+POST {{baseUrl}}/api/v1/skins?name=AWP%20%7C%20Asiimov%20(Field-Tested)
+
+###
+POST http://127.0.0.1:8080/api/v1/skins?name=AK-47+%7C+Safari+Mesh+%28Field-Tested%29
+
+### 1. AK-47 | Safari Mesh (Field-Tested)
+POST {{baseUrl}}/api/v1/skins?name=AK-47%20%7C%20Safari%20Mesh%20(Field-Tested)
+
+### 4. AK-47 | Olive Polycam (Factory New)
+POST {{baseUrl}}/api/v1/skins?name=AK-47%20%7C%20Olive%20Polycam%20(Factory%20New)
+
+### 5. AK-47 | Safari Mesh (Well-Worn)
+POST {{baseUrl}}/api/v1/skins/import?min=500&max=5000
+
+
+###
+POST {{baseUrl}}/api/v1/skins/import?min=500&max=15000
+
+###
+POST {{baseUrl}}/api/v1/skins/test-buy?itemId=11648701902&price=0.5
+
+2026-09-19T10:16:41.627+10:00  INFO 10460 --- [HandkerSkinsProject] [ctReadThread-83] o.e.h.fetcher.MarketWebSocketClient      : [TEST] id=11648701902 price=0.5 hashName=MP9 | Dizzy (Field-Tested)
