@@ -56,7 +56,7 @@ public class MarketCsgoFetcherClient {
     public Map<String, BigDecimal> fetchTopOrdersMap() {
         try {
             MarketOrdersFileResponse response = restClient.get()
-                    .uri("/prices/orders/RUB.json") // Использован относительный путь
+                    .uri("/prices/orders/RUB.json")
                     .retrieve()
                     .body(MarketOrdersFileResponse.class);
 

@@ -23,4 +23,3 @@ POST {{baseUrl}}/api/v1/skins/import?min=500&max=15000
 ###
 POST {{baseUrl}}/api/v1/skins/test-buy?itemId=11648701902&price=0.5
 
-2026-09-19T10:16:41.627+10:00  INFO 10460 --- [HandkerSkinsProject] [ctReadThread-83] o.e.h.fetcher.MarketWebSocketClient      : [TEST] id=11648701902 price=0.5 hashName=MP9 | Dizzy (Field-Tested)

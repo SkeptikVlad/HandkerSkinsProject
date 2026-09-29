@@ -42,18 +42,18 @@ public class MarketWebSocketClient extends WebSocketClient {
     private static final long SKIN_COOLDOWN_MILLIS = 30_000;
     private static final long WARMUP_MILLIS = 60_000;
 
-    private volatile long subscribedAtMillis = 0;// 30 сек
+    private volatile long subscribedAtMillis = 0;
     private record SpreadTier(BigDecimal maxTopOrder, BigDecimal minResaleSpread) {}
 
     private static final List<SpreadTier> SPREAD_TIERS = List.of(
             new SpreadTier(new BigDecimal("1000"), new BigDecimal("1.30")),
             new SpreadTier(new BigDecimal("1500"), new BigDecimal("1.30")),
             new SpreadTier(new BigDecimal("3000"), new BigDecimal("1.20")),
-            new SpreadTier(new BigDecimal("5000"), new BigDecimal("1.15")), // было catch-all, теперь явная граница
+            new SpreadTier(new BigDecimal("5000"), new BigDecimal("1.15")),
             new SpreadTier(new BigDecimal("7000"), new BigDecimal("1.15")),
             new SpreadTier(new BigDecimal("10000"), new BigDecimal("1.15")),
             new SpreadTier(new BigDecimal("15000"), new BigDecimal("1.15")),
-            new SpreadTier(null,                   new BigDecimal("1.10"))  // >7000, запасной catch-all
+            new SpreadTier(null,                   new BigDecimal("1.10"))
     );
 
     private final Map<String, Long> skinCooldown = new ConcurrentHashMap<>();
@@ -81,14 +81,14 @@ public class MarketWebSocketClient extends WebSocketClient {
         this.buyExecutor = buyExecutor;
     }
     private static final List<MarginTier> MARGIN_TIERS = List.of(
-            new MarginTier(new BigDecimal("1000"), new BigDecimal("1.01"), new BigDecimal("1.09")), // 500-1000: 1-5%
-            new MarginTier(new BigDecimal("1500"), new BigDecimal("1.01"), new BigDecimal("1.09")), // 1000-1500: 1-4%
-            new MarginTier(new BigDecimal("3000"), new BigDecimal("1.01"), new BigDecimal("1.08")), // 1500-3000: 1-3%
-            new MarginTier(new BigDecimal("5000"), new BigDecimal("1.01"), new BigDecimal("1.06")), // 3000-5000: 1-2%
+            new MarginTier(new BigDecimal("1000"), new BigDecimal("1.01"), new BigDecimal("1.09")),
+            new MarginTier(new BigDecimal("1500"), new BigDecimal("1.01"), new BigDecimal("1.09")),
+            new MarginTier(new BigDecimal("3000"), new BigDecimal("1.01"), new BigDecimal("1.08")),
+            new MarginTier(new BigDecimal("5000"), new BigDecimal("1.01"), new BigDecimal("1.06")),
             new MarginTier(new BigDecimal("7000"), new BigDecimal("1.005"), new BigDecimal("1.05")),
-            new MarginTier(new BigDecimal("10000"), new BigDecimal("1.005"), new BigDecimal("1.04")),// 5000-7000: 1-1.5%
+            new MarginTier(new BigDecimal("10000"), new BigDecimal("1.005"), new BigDecimal("1.04")),
             new MarginTier(new BigDecimal("15000"), new BigDecimal("1.005"), new BigDecimal("1.03")),
-            new MarginTier(null,                    new BigDecimal("1.005"), new BigDecimal("1.03"))  // >7000, запасной catch-all
+            new MarginTier(null,                    new BigDecimal("1.005"), new BigDecimal("1.03"))
     );
 
 
@@ -184,7 +184,7 @@ public class MarketWebSocketClient extends WebSocketClient {
             }
             if (subscribedAtMillis == 0
                     || System.currentTimeMillis() - subscribedAtMillis < WARMUP_MILLIS) {
-                return; // это снимок с момента подписки, не живое новое событие
+                return;
             }
 
             long nameId = dataNode.path("name_id").asLong();
@@ -306,7 +306,7 @@ public class MarketWebSocketClient extends WebSocketClient {
 
     public void shutdownPermanently() {
         this.isClosedManually = true;
-        close(); // теперь это "чистый" close() из WebSocketClient, без побочных эффектов
+        close();
     }
 
 
